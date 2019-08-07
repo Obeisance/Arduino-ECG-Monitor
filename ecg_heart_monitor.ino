@@ -7,7 +7,7 @@
 #define ECG_pin   A1
 #define select_button_pin 1
 #define option_button_pin 2
-#define num_options 4;
+#define num_options 5;
 #define num_log_modes 2;
 #define data_plot_interval   20000 //us
 #define pulse_meas_debounce 100000 //us
@@ -57,6 +57,7 @@ boolean option_button_state = false;
 boolean screen_state = true;
 boolean logging_state = false;
 boolean above_thresh = false;
+boolean re_scale_plot = true;
 boolean flip_data = false;
 uint8_t option_mode = 0;
 uint8_t option_state = 0;
@@ -230,9 +231,13 @@ void loop() {
         pulse_ECG_thresh = 0.1;
       }
     }
-    else if(option_mode == 3)
+    else if (option_mode == 3)
     {
       log_mode = (log_mode + 1) % num_log_modes;
+    }
+    else if (option_mode == 4)
+    {
+      re_scale_plot = !re_scale_plot;
     }
 
   }
@@ -260,7 +265,7 @@ void loop() {
 
     if (screen_state) {
       //plot the analog input data
-      plot_array(0, 10, plot_data_length, 53, plot_data, plot_data_length, true, true);
+      plot_array(0, 10, plot_data_length, 53, plot_data, plot_data_length, re_scale_plot, true);
 
       //show heart rate data
       display_heart_rate(1, 1);
@@ -288,17 +293,30 @@ void loop() {
         display.print(F("pulse thresh: "));
         display.print(pulse_ECG_thresh);
       }
-      else if(option_mode == 3)
+      else if (option_mode == 3)
       {
         display.setCursor(10, 16);
         display.print(F("Log mode: "));
-        if(log_mode == 0)
+        if (log_mode == 0)
         {
           display.print(F("ECG"));
         }
-        else if(log_mode == 1)
+        else if (log_mode == 1)
         {
           display.print(F("Pulse"));
+        }
+      }
+      else if (option_mode == 4)
+      {
+        display.setCursor(10, 16);
+        display.print(F("Rescale: "));
+        if (re_scale_plot)
+        {
+          display.print(F("True"));
+        }
+        else
+        {
+          display.print(F("False"));
         }
       }
     }
@@ -418,7 +436,7 @@ void display_batt_status(int x_loc, int y_loc)
   {
     batt_avg = batt_avg * (1.00 - 0.01) + sensorValue * 0.01;
   }
-  uint8_t batt_fill = (batt_avg - 2857) * 100 / (4000 - 2857); //2857 is about 3V (0%), 4000 is about 4.2V (100%)
+  uint8_t batt_fill = (batt_avg - 3142) * 100 / (4090 - 3142); //3142 is about 3.3V, 2857 is about 3V (0%), 4000 is about 4.2V (100%)
 
   //8 pixels tall by 5 pixels wide battery indicator
   uint8_t pix_fill = batt_fill / 13;
