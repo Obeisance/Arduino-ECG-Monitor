@@ -3,15 +3,17 @@
 #include <Adafruit_SSD1306.h>
 #include <SD.h>
 
-
+//the MKRzero has 32 kB of SRAM!
 #define ECG_pin   A1
 #define select_button_pin 1
 #define option_button_pin 2
-#define num_options 5;
+#define num_options 6;
 #define num_log_modes 2;
+#define event_log_interval   10000 //us
 #define data_plot_interval   20000 //us
 #define pulse_meas_debounce 100000 //us
 #define plot_data_length   128
+#define event_data_length   2048 //8 kB each, for 16 kB of event log space between the timer and event data
 #define signal_avg_frac_new_baseline   0.1
 #define signal_avg_frac_new_peak   0.05
 
@@ -40,12 +42,17 @@ static const unsigned char PROGMEM heart_bmp[] = {
 File dataFile;
 unsigned long timer = 0;
 unsigned long data_collected_last_time = 0;
+unsigned long event_collected_last_time = 0;
 uint16_t plot_data[plot_data_length] = {};
+uint8_t plot_index = 0;
 unsigned long plot_updated_time = 0;
+unsigned long event_time[event_data_length] = {};
+double event_data[event_data_length] = {};
+uint16_t event_index = 0;
 uint8_t heart_rate = 60;
 boolean new_pulse = false;
 uint8_t log_mode = 0;
-double pulse_ECG_thresh = 0.3;//mV
+double pulse_ECG_thresh = 0.6;//mV
 double baseline_signal = 0;
 double above_thresh_avg = 5.00;
 double pulse_delay = 100000;
@@ -90,6 +97,7 @@ void loop() {
   uint16_t AtoD = analogRead(ECG_pin);
   double ECG_data = AtoD * (3.300 / 4095.000) * 1000.000 / 328.1018; //mV
   timer = micros();
+
   /*
     Serial.print((above_thresh + baseline_signal) * 1000);
     Serial.print(",");
@@ -189,8 +197,17 @@ void loop() {
     {
       AtoD = 4095 - AtoD;
     }
-    update_data_array(AtoD, plot_data, plot_data_length);
+    plot_index = update_data_array(AtoD, plot_data, plot_data_length, plot_index);
     data_collected_last_time = timer;
+  }
+
+  if((timer - event_collected_last_time) >= event_log_interval)
+  {
+    //also collect data for the event log
+    event_time[event_index] = timer;
+    event_data[event_index] = ECG_data;
+    event_index = (event_index + 1) % event_data_length;
+    event_collected_last_time = timer;
   }
 
   //evaluate button presses to change states that inform UI actions
@@ -239,6 +256,35 @@ void loop() {
     {
       re_scale_plot = !re_scale_plot;
     }
+    else if (option_mode == 5)
+    {
+      //collect the event data!
+      logging_state = !logging_state;
+      if (logging_state) //if we just began logging, write the data header to demark the beginning of new data
+      {
+        if (!SD.begin(SDCARD_SS_PIN)) {
+          Serial.println(F("Card failed, or not present"));
+        }
+        Serial.println(F("card initialized."));
+        print_log_header();
+        // open the file.
+        dataFile = SD.open("datalog.txt", FILE_WRITE);
+        //write the event log
+        for (uint16_t i = 0; i < event_data_length; i++)
+        {
+          uint16_t print_event_index = (event_index + i) % event_data_length;
+          dataFile.print(event_time[print_event_index]);
+          dataFile.print(F(","));
+          dataFile.print(event_data[print_event_index], 4);//mV, steps of 2.45 microvolts per AtoD increment
+          dataFile.println(F(",,"));
+        }
+      }
+      else
+      {
+        //close the file, finalizing data save
+        dataFile.close();
+      }
+    }
 
   }
   else if (select_button_state && !digitalRead(select_button_pin))
@@ -265,7 +311,7 @@ void loop() {
 
     if (screen_state) {
       //plot the analog input data
-      plot_array(0, 10, plot_data_length, 53, plot_data, plot_data_length, re_scale_plot, true);
+      plot_array(0, 10, plot_data_length, 53, plot_data, plot_data_length, plot_index, re_scale_plot, true);
 
       //show heart rate data
       display_heart_rate(1, 1);
@@ -319,6 +365,18 @@ void loop() {
           display.print(F("False"));
         }
       }
+      else if (option_mode == 5)
+      {
+        display.setCursor(10, 16);
+        if (logging_state)
+        {
+          display.print(F("Event: log active"));
+        }
+        else if (!logging_state)
+        {
+          display.print(F("Event: log inactive"));
+        }
+      }
     }
 
     //and finally update the display output
@@ -361,7 +419,7 @@ void findMax(uint16_t data[], uint8_t data_length, double &data_max, double &dat
   }
 }
 
-void plot_array(int x_loc, int y_loc, int width, int height, uint16_t data[], uint8_t data_length, boolean rescale, boolean vertical_fill)
+void plot_array(int x_loc, int y_loc, int width, int height, uint16_t data[], uint8_t data_length, uint8_t start_index, boolean rescale, boolean vertical_fill)
 {
 
   double data_max = 4096.00;
@@ -384,7 +442,8 @@ void plot_array(int x_loc, int y_loc, int width, int height, uint16_t data[], ui
   int prev_height = 0;
   for (int i = 0; i < plot_width; i++)
   {
-    int data_height = height - (data[i] - data_min) * data_y_scaler;
+    uint8_t index = (i + start_index) % data_length;
+    int data_height = height - (data[index] - data_min) * data_y_scaler;
     if (vertical_fill && i > 0)
     {
       int data_step = prev_height - data_height;
@@ -408,14 +467,19 @@ void plot_array(int x_loc, int y_loc, int width, int height, uint16_t data[], ui
   }
 }
 
-void update_data_array(uint16_t new_data, uint16_t data[], uint8_t data_length)
+uint8_t update_data_array(uint16_t new_data, uint16_t data[], uint8_t data_length, uint8_t index)
 {
-  //rotate the array to make room for new
-  for (int i = 0; i < data_length - 1; i++)
-  {
+  data[index] = new_data;
+  index = (index + 1) % data_length;
+  return index;
+  /*
+    //rotate the array to make room for new
+    for (int i = 0; i < data_length - 1; i++)
+    {
     data[i] = data[i + 1];
-  }
-  data[data_length - 1] = new_data;
+    }
+    data[data_length - 1] = new_data;
+  */
 }
 
 void display_heart_rate(int x_loc, int y_loc)
@@ -439,7 +503,7 @@ void display_batt_status(int x_loc, int y_loc)
   uint8_t batt_fill = (batt_avg - 3142) * 100 / (4090 - 3142); //3142 is about 3.3V, 2857 is about 3V (0%), 4000 is about 4.2V (100%)
 
   //8 pixels tall by 5 pixels wide battery indicator
-  uint8_t pix_fill = batt_fill / 13;
+  uint8_t pix_fill = batt_fill / 15;
   //generate battery symbol
   unsigned char batt_level[5] = {0x70, 0x00, 0x00, 0x00, 0x00};
   for (int i = 5; i < 40; i++)
