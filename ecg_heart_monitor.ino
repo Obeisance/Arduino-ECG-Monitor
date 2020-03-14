@@ -7,7 +7,7 @@
 #define ECG_pin   A1
 #define select_button_pin 1
 #define option_button_pin 2
-#define num_options 6;
+#define num_options 8;
 #define num_log_modes 2;
 #define event_log_interval   10000 //us
 #define data_plot_interval   20000 //us
@@ -66,6 +66,7 @@ boolean logging_state = false;
 boolean above_thresh = false;
 boolean re_scale_plot = true;
 boolean flip_data = false;
+boolean autoflip_ECG = false;
 uint8_t option_mode = 0;
 uint8_t option_state = 0;
 
@@ -126,9 +127,9 @@ void loop() {
       above_thresh = true;
       if (pulse_delay > 500000)
       {
-        pulse_delay = 500000;//30 bpm min
+        pulse_delay = 500000;//30 bpm minimum
       }
-      if (timer - flip_debounce > 3000000)
+      if (timer - flip_debounce > 3000000 && autoflip_ECG)
       {
         if (above_thresh_avg < 0.0 && !flip_data)//let's try to keep the QRS wave upright - this might not work for bad thresholding or strange waveforms
         {
@@ -168,7 +169,15 @@ void loop() {
         dataFile.print(F(","));
         dataFile.print(ECG_data, 4);//mV, steps of 2.45 microvolts per AtoD increment
         dataFile.print(F(","));
-        dataFile.print(heart_rate);
+        if (new_pulse)
+        {
+          dataFile.print(heart_rate);
+          new_pulse = false;
+        }
+        else
+        {
+          dataFile.print(F("0"));
+        }
         dataFile.print(F(","));
         dataFile.println();
         //dataFile.close();//If we do this for each write, we slow the whole process
@@ -177,7 +186,7 @@ void loop() {
       {
         //log pulse only, and only at changed values
         dataFile.print(timer);
-        dataFile.print(F(",,"));
+        dataFile.print(F(",0,"));
         dataFile.print(heart_rate);
         dataFile.print(F(","));
         dataFile.println();
@@ -201,7 +210,7 @@ void loop() {
     data_collected_last_time = timer;
   }
 
-  if((timer - event_collected_last_time) >= event_log_interval)
+  if ((timer - event_collected_last_time) >= event_log_interval)
   {
     //also collect data for the event log
     event_time[event_index] = timer;
@@ -276,7 +285,7 @@ void loop() {
           dataFile.print(event_time[print_event_index]);
           dataFile.print(F(","));
           dataFile.print(event_data[print_event_index], 4);//mV, steps of 2.45 microvolts per AtoD increment
-          dataFile.println(F(",,"));
+          dataFile.println(F(",0,"));
         }
       }
       else
@@ -285,7 +294,16 @@ void loop() {
         dataFile.close();
       }
     }
-
+    else if (option_mode == 6)
+    {
+      //turn off auto flipping
+      autoflip_ECG = !autoflip_ECG;
+    }
+    else if (option_mode == 7)
+    {
+      //flip the ECG data plotting
+      flip_data = !flip_data;
+    }
   }
   else if (select_button_state && !digitalRead(select_button_pin))
   {
@@ -376,6 +394,23 @@ void loop() {
         {
           display.print(F("Event: log inactive"));
         }
+      }
+      else if (option_mode == 6)
+      {
+        display.setCursor(10, 16);
+        if (autoflip_ECG)
+        {
+          display.print(F("Autoflip: active"));
+        }
+        else if (!autoflip_ECG)
+        {
+          display.print(F("Autoflip: inactive"));
+        }
+      }
+      else if (option_mode == 7)
+      {
+        display.setCursor(10, 16);
+        display.print(F("Flip ECG"));
       }
     }
 
