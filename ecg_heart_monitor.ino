@@ -7,7 +7,7 @@
 #define ECG_pin   A1
 #define select_button_pin 1
 #define option_button_pin 2
-#define num_options 8;
+#define num_options 9;
 #define num_log_modes 2;
 #define event_log_interval   10000 //us
 #define data_plot_interval   20000 //us
@@ -67,6 +67,7 @@ boolean above_thresh = false;
 boolean re_scale_plot = true;
 boolean flip_data = false;
 boolean autoflip_ECG = false;
+boolean send_serial_output = false;
 uint8_t option_mode = 0;
 uint8_t option_state = 0;
 
@@ -99,17 +100,6 @@ void loop() {
   double ECG_data = AtoD * (3.300 / 4095.000) * 1000.000 / 328.1018; //mV
   timer = micros();
 
-  /*
-    Serial.print((above_thresh + baseline_signal) * 1000);
-    Serial.print(",");
-    Serial.print((above_thresh_avg + baseline_signal) * 1000);
-    Serial.print(",");
-    Serial.print(baseline_signal * 1000);
-    Serial.print(",");
-    Serial.print((pulse_ECG_thresh + baseline_signal) * 1000);
-    Serial.print(",");
-    Serial.println(ECG_data * 1000); //output the data that we can visualize, mV units
-  */
   //extract the heart rate
   double diff_ECG = ECG_data - baseline_signal;
   double abs_diff_ECG = abs(diff_ECG);
@@ -219,109 +209,8 @@ void loop() {
     event_collected_last_time = timer;
   }
 
-  //evaluate button presses to change states that inform UI actions
-  if (!select_button_state && digitalRead(select_button_pin))
-  {
-    select_button_state = true;
-    if (option_mode == 0)
-    {
-      //screen on or off
-      screen_state = !screen_state;
-    }
-    else if (option_mode == 1)
-    {
-      //adjust logging
-      logging_state = !logging_state;
-      if (logging_state) //if we just began logging, write the data header to demark the beginning of new data
-      {
-        if (!SD.begin(SDCARD_SS_PIN)) {
-          Serial.println(F("Card failed, or not present"));
-        }
-        Serial.println(F("card initialized."));
-        print_log_header();
-        // open the file.
-        dataFile = SD.open("datalog.txt", FILE_WRITE);
-      }
-      else
-      {
-        //close the file, finalizing data save
-        dataFile.close();
-      }
-    }
-    else if (option_mode == 2)
-    {
-      //manual pulse threshold adjust
-      pulse_ECG_thresh += 0.1;
-      if (pulse_ECG_thresh > 1.6)
-      {
-        pulse_ECG_thresh = 0.1;
-      }
-    }
-    else if (option_mode == 3)
-    {
-      log_mode = (log_mode + 1) % num_log_modes;
-    }
-    else if (option_mode == 4)
-    {
-      re_scale_plot = !re_scale_plot;
-    }
-    else if (option_mode == 5)
-    {
-      //collect the event data!
-      logging_state = !logging_state;
-      if (logging_state) //if we just began logging, write the data header to demark the beginning of new data
-      {
-        if (!SD.begin(SDCARD_SS_PIN)) {
-          Serial.println(F("Card failed, or not present"));
-        }
-        Serial.println(F("card initialized."));
-        print_log_header();
-        // open the file.
-        dataFile = SD.open("datalog.txt", FILE_WRITE);
-        //write the event log
-        for (uint16_t i = 0; i < event_data_length; i++)
-        {
-          uint16_t print_event_index = (event_index + i) % event_data_length;
-          dataFile.print(event_time[print_event_index]);
-          dataFile.print(F(","));
-          dataFile.print(event_data[print_event_index], 4);//mV, steps of 2.45 microvolts per AtoD increment
-          dataFile.println(F(",0,"));
-        }
-      }
-      else
-      {
-        //close the file, finalizing data save
-        dataFile.close();
-      }
-    }
-    else if (option_mode == 6)
-    {
-      //turn off auto flipping
-      autoflip_ECG = !autoflip_ECG;
-    }
-    else if (option_mode == 7)
-    {
-      //flip the ECG data plotting
-      flip_data = !flip_data;
-    }
-  }
-  else if (select_button_state && !digitalRead(select_button_pin))
-  {
-    select_button_state = false;
-  }
 
-  if (screen_state && !option_button_state && digitalRead(option_button_pin))
-  {
-    option_button_state = true;
-    option_mode += 1;
-    option_mode = option_mode % num_options;
-  }
-  else if (screen_state && option_button_state && !digitalRead(option_button_pin))
-  {
-    option_button_state = false;
-  }
-
-  //finally, periodically update the screen
+  //*********************** finally, periodically update the screen ************************
   if ((timer - plot_updated_time) >= 33333)//33333
   {
     //30 hz screen update
@@ -412,6 +301,138 @@ void loop() {
         display.setCursor(10, 16);
         display.print(F("Flip ECG"));
       }
+      else if (option_mode == 8)
+      {
+        display.setCursor(10, 16);
+        if (send_serial_output)
+        {
+          display.print(F("USB out: active"));
+        }
+        else if (!send_serial_output) {
+          display.print(F("USB out: inactive"));
+        }
+      }
+    }
+
+    //evaluate button presses to change states that inform UI actions - we don't need to do this more often than the screen update
+    if (!select_button_state && digitalRead(select_button_pin))
+    {
+      select_button_state = true;
+      if (option_mode == 0)
+      {
+        //screen on or off
+        screen_state = !screen_state;
+      }
+      else if (option_mode == 1)
+      {
+        //adjust logging
+        logging_state = !logging_state;
+        if (logging_state) //if we just began logging, write the data header to demark the beginning of new data
+        {
+          if (!SD.begin(SDCARD_SS_PIN)) {
+            Serial.println(F("Card failed, or not present"));
+          }
+          if (send_serial_output) {
+            Serial.println(F("card initialized."));
+          }
+          print_log_header();
+          // open the file.
+          dataFile = SD.open("datalog.txt", FILE_WRITE);
+        }
+        else
+        {
+          //close the file, finalizing data save
+          dataFile.close();
+        }
+      }
+      else if (option_mode == 2)
+      {
+        //manual pulse threshold adjust
+        pulse_ECG_thresh += 0.1;
+        if (pulse_ECG_thresh > 1.6)
+        {
+          pulse_ECG_thresh = 0.1;
+        }
+      }
+      else if (option_mode == 3)
+      {
+        log_mode = (log_mode + 1) % num_log_modes;
+      }
+      else if (option_mode == 4)
+      {
+        re_scale_plot = !re_scale_plot;
+      }
+      else if (option_mode == 5)
+      {
+        //collect the event data!
+        logging_state = !logging_state;
+        if (logging_state) //if we just began logging, write the data header to demark the beginning of new data
+        {
+          if (!SD.begin(SDCARD_SS_PIN)) {
+            Serial.println(F("Card failed, or not present"));
+          }
+          Serial.println(F("card initialized."));
+          print_log_header();
+          // open the file.
+          dataFile = SD.open("datalog.txt", FILE_WRITE);
+          //write the event log
+          for (uint16_t i = 0; i < event_data_length; i++)
+          {
+            uint16_t print_event_index = (event_index + i) % event_data_length;
+            dataFile.print(event_time[print_event_index]);
+            dataFile.print(F(","));
+            dataFile.print(event_data[print_event_index], 4);//mV, steps of 2.45 microvolts per AtoD increment
+            dataFile.println(F(",0,"));
+          }
+        }
+        else
+        {
+          //close the file, finalizing data save
+          dataFile.close();
+        }
+      }
+      else if (option_mode == 6)
+      {
+        //turn off auto flipping
+        autoflip_ECG = !autoflip_ECG;
+      }
+      else if (option_mode == 7)
+      {
+        //flip the ECG data plotting
+        flip_data = !flip_data;
+      }
+      else if (option_mode == 8)
+      {
+        //enable serial diagnostic messaging
+        send_serial_output = !send_serial_output;
+      }
+    }
+    else if (select_button_state && !digitalRead(select_button_pin))
+    {
+      select_button_state = false;
+    }
+
+    if (screen_state && !option_button_state && digitalRead(option_button_pin))
+    {
+      option_button_state = true;
+      option_mode += 1;
+      option_mode = option_mode % num_options;
+    }
+    else if (screen_state && option_button_state && !digitalRead(option_button_pin))
+    {
+      option_button_state = false;
+    }
+
+    if (send_serial_output) {
+      Serial.print((above_thresh + baseline_signal) * 1000);
+      Serial.print(",");
+      Serial.print((above_thresh_avg + baseline_signal) * 1000);
+      Serial.print(",");
+      Serial.print(baseline_signal * 1000);
+      Serial.print(",");
+      Serial.print((pulse_ECG_thresh + baseline_signal) * 1000);
+      Serial.print(",");
+      Serial.println(ECG_data * 1000); //output the data that we can visualize, mV units
     }
 
     //and finally update the display output
@@ -419,7 +440,10 @@ void loop() {
     plot_updated_time = timer;
   }
 
+
 }
+//~~~~~~~~~ end main loop ~~~~~~~~~~~~~~
+
 
 //use a very dense left-to-right binary array of data
 //to signify a bitmap image to load
@@ -535,7 +559,7 @@ void display_batt_status(int x_loc, int y_loc)
   {
     batt_avg = batt_avg * (1.00 - 0.01) + sensorValue * 0.01;
   }
-  uint8_t batt_fill = (batt_avg - 3142) * 100 / (4090 - 3142); //3142 is about 3.3V, 2857 is about 3V (0%), 4000 is about 4.2V (100%)
+  uint8_t batt_fill = (batt_avg - 3142) * 100 / (4000 - 3142); //3142 is about 3.3V, 2857 is about 3V (0%), 4000 is about 4.2V (100%)
 
   //8 pixels tall by 5 pixels wide battery indicator
   uint8_t pix_fill = batt_fill / 15;
